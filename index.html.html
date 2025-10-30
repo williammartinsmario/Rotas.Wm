@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gerador de Rotas Otimizadas</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #f2f6fc;
+    color: #333;
+    margin: 0;
+    padding: 0;
+    text-align: center;
+  }
+  h1 {
+    background: #0078ff;
+    color: white;
+    padding: 15px;
+    margin: 0 0 20px 0;
+  }
+  .container {
+    max-width: 600px;
+    margin: auto;
+    background: white;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+  }
+  input, button {
+    padding: 10px;
+    font-size: 16px;
+    margin: 8px 0;
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+  }
+  button {
+    background: #0078ff;
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+  }
+  button:hover {
+    background: #005ecc;
+  }
+  .links {
+    margin-top: 20px;
+    text-align: left;
+  }
+  .links a {
+    display: block;
+    word-wrap: break-word;
+    color: #0078ff;
+    margin-bottom: 10px;
+  }
+  .hidden { display: none; }
+  #progress {
+    background: #e6f0ff;
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 10px;
+    font-size: 15px;
+  }
+</style>
+</head>
+<body>
+
+<h1>🚗 Gerador de Rotas Otimizadas</h1>
+<div class="container">
+  <label for="inicio">Endereço Inicial:</label>
+  <input type="text" id="inicio" placeholder="Ex: Rua Graça Aranha, 175, Campinas, SP">
+
+  <label for="arquivo">Arquivo de endereços (.txt):</label>
+  <input type="file" id="arquivo" accept=".txt">
+
+  <button id="gerar">Gerar Rotas</button>
+  <div id="status"></div>
+  <div id="progress" class="hidden"></div>
+
+  <div id="resultados" class="links hidden">
+    <h3>Links Gerados:</h3>
+    <div id="lista-links"></div>
+    <button id="baixar">Baixar arquivo .txt</button>
+  </div>
+</div>
+
+<script>
+const MAX_PONTOS = 10;
+const statusEl = document.getElementById('status');
+const progressEl = document.getElementById('progress');
+const resultadosEl = document.getElementById('resultados');
+const listaLinksEl = document.getElementById('lista-links');
+const baixarBtn = document.getElementById('baixar');
+
+document.getElementById('gerar').addEventListener('click', async () => {
+  const inicio = document.getElementById('inicio').value.trim();
+  const arquivo = document.getElementById('arquivo').files[0];
+
+  if (!inicio) return alert('Digite o endereço inicial.');
+  if (!arquivo) return alert('Selecione um arquivo .txt com os endereços.');
+
+  statusEl.textContent = "Iniciando processamento...";
+  resultadosEl.classList.add('hidden');
+  progressEl.classList.remove('hidden');
+  listaLinksEl.innerHTML = "";
+  progressEl.textContent = "";
+
+  const texto = await arquivo.text();
+  const enderecos = texto.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+  const todos = [inicio, ...enderecos];
+
+  const coordenadas = {};
+  let i = 0;
+  for (let e of todos) {
+    i++;
+    progressEl.textContent = `📍 Geocodificando ${i} de ${todos.length} endereços...`;
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(e)}`);
+      const data = await res.json();
+      if (data && data[0]) {
+        coordenadas[e] = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+      }
+    } catch (err) { console.log("Erro geocodificando", e); }
+  }
+
+  const validos = Object.keys(coordenadas);
+  if (validos.length < 2) {
+    statusEl.textContent = "⚠️ Erro: poucos endereços válidos.";
+    progressEl.classList.add('hidden');
+    return;
+  }
+
+  const origem = coordenadas[inicio];
+  const destinos = enderecos.filter(e => coordenadas[e]);
+
+  // Algoritmo simples de rota mínima (greedy)
+  const ordem = [inicio];
+  let atual = origem;
+  const restantes = [...destinos];
+  while (restantes.length > 0) {
+    let prox = restantes[0];
+    let menorDist = Infinity;
+    for (let d of restantes) {
+      const dist = distancia(atual, coordenadas[d]);
+      if (dist < menorDist) { menorDist = dist; prox = d; }
+    }
+    ordem.push(prox);
+    atual = coordenadas[prox];
+    restantes.splice(restantes.indexOf(prox), 1);
+  }
+
+  // Gerar links Google Maps (até 10 pontos por rota)
+  const rotas = [];
+  for (let i = 1; i < ordem.length; i += (MAX_PONTOS - 1)) {
+    const grupo = ordem.slice(i, i + (MAX_PONTOS - 1));
+    const pontos = [inicio, ...grupo];
+    const link = "https://www.google.com/maps/dir/" + pontos.map(p => encodeURIComponent(p)).join('/');
+    rotas.push(link);
+  }
+
+  // Mostrar e permitir download
+  statusEl.textContent = "✅ Rotas geradas com sucesso!";
+  progressEl.classList.add('hidden');
+  resultadosEl.classList.remove('hidden');
+  listaLinksEl.innerHTML = rotas.map((r,i) => `<a href="${r}" target="_blank">Rota ${i+1}</a>`).join('');
+
+  baixarBtn.onclick = () => {
+    const blob = new Blob(rotas.map((r,i)=>`Rota ${i+1}: ${r}\n\n`), {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'rotas_geradas.txt';
+    a.click();
+  };
+});
+
+function distancia(a,b){
+  const R = 6371;
+  const dLat = (b[0]-a[0]) * Math.PI/180;
+  const dLon = (b[1]-a[1]) * Math.PI/180;
+  const lat1 = a[0]*Math.PI/180;
+  const lat2 = b[0]*Math.PI/180;
+  const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+</script>
+
+</body>
+</html>
